@@ -69,6 +69,11 @@ func (p *Pool) Len() int {
 	return len(p.targets)
 }
 
+// UseRobloxHost reports whether requests to this target should present the Roblox host header.
+func (t *Target) UseRobloxHost() bool {
+	return t.direct
+}
+
 func joinURLPath(basePath, reqPath string) string {
 	switch {
 	case basePath == "":

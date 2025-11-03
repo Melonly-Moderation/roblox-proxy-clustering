@@ -104,7 +104,9 @@ func (c *Client) Forward(ctx context.Context, req *ForwardRequest) (*http.Respon
 		return nil, err
 	}
 
-	httpReq.Host = req.RobloxHost
+	if target.UseRobloxHost() {
+		httpReq.Host = req.RobloxHost
+	}
 	cloneHeaders(httpReq.Header, req.Header)
 	sanitizeHopHeaders(httpReq.Header)
 
