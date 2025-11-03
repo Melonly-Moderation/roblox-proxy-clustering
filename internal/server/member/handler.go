@@ -341,6 +341,8 @@ func (h *Handler) fetchJSON(ctx context.Context, service, path string, params ur
 		return err
 	}
 
+	h.logger.Info("fetching JSON", slog.String("service", service), slog.String("path", basePath), slog.String("query", rawQuery), slog.String("target", target.String()))
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return err

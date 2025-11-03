@@ -37,6 +37,8 @@ func (f *Forwarder) Do(w http.ResponseWriter, r *http.Request, target *url.URL) 
 		return errors.New("forwarder client is nil")
 	}
 
+	f.Logger.Info("forwarding request", slog.String("method", r.Method), slog.String("url", r.URL.String()), slog.String("target", target.String()))
+
 	ctx, cancel := context.WithTimeout(r.Context(), f.RequestTimeout)
 	defer cancel()
 
