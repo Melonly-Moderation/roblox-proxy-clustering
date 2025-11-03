@@ -17,6 +17,10 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
+	if cfg.DiscordWebhookURL != "" {
+		config.SendDiscordWebhook(cfg.DiscordWebhookURL, "Proxy service started successfully")
+	}
+
 	application, err := app.New(cfg)
 	if err != nil {
 		log.Fatalf("init app: %v", err)
