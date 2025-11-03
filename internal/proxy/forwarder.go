@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -10,13 +11,16 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/NoahCxrest/roblox-proxy-clustering/internal/config"
 )
 
 // Forwarder streams the incoming request to an upstream target with minimal overhead.
 type Forwarder struct {
-	Client         *http.Client
-	Logger         *slog.Logger
-	RequestTimeout time.Duration
+	Client            *http.Client
+	Logger            *slog.Logger
+	RequestTimeout    time.Duration
+	DiscordWebhookURL string
 }
 
 var hopHeaders = []string{
@@ -52,6 +56,10 @@ func (f *Forwarder) Do(w http.ResponseWriter, r *http.Request, target *url.URL) 
 		return err
 	}
 	defer reqResp.Body.Close()
+
+	if reqResp.StatusCode == 429 {
+		config.SendDiscordWebhook(f.DiscordWebhookURL, fmt.Sprintf("Received 429 from upstream: %s", target.String()))
+	}
 
 	copyHeaders(w.Header(), reqResp.Header)
 	for _, h := range hopHeaders {

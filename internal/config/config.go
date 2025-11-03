@@ -1,8 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -44,6 +48,7 @@ type Config struct {
 	MaxIdleConnsPerHost    int
 	BackgroundRefreshAfter time.Duration
 	CacheTTL               time.Duration
+	DiscordWebhookURL      string
 }
 
 // Load parses environment variables and returns a validated Config.
@@ -58,6 +63,7 @@ func Load() (Config, error) {
 		MaxIdleConnsPerHost:    intOrDefault(os.Getenv("PROXY_MAX_IDLE_CONNS_PER_HOST"), defaultMaxIdleConnsPerHost),
 		BackgroundRefreshAfter: durationOrDefault(os.Getenv("PROXY_BACKGROUND_REFRESH_AFTER"), defaultBackgroundRefresh),
 		CacheTTL:               durationOrDefault(os.Getenv("PROXY_CACHE_TTL"), defaultCacheTTL),
+		DiscordWebhookURL:      strings.TrimSpace(os.Getenv("PROXY_DISCORD_WEBHOOK_URL")),
 	}
 
 	roleRaw := strings.TrimSpace(strings.ToLower(os.Getenv("PROXY_ROLE")))
@@ -143,4 +149,35 @@ func splitAndClean(raw string) []string {
 		}
 	}
 	return out
+}
+
+// SendDiscordWebhook sends a message to the Discord webhook URL if provided.
+func SendDiscordWebhook(webhookURL, message string) {
+	if webhookURL == "" {
+		return
+	}
+
+	payload := map[string]string{"content": message}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		// Log error? But no logger here.
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	// Ignore response
 }

@@ -55,9 +55,10 @@ func New(cfg config.Config, logger *slog.Logger, cacheStore cache.Store, client 
 		logger: logger.With(slog.String("component", "member-handler")),
 		cache:  cacheStore,
 		forwarder: &proxy.Forwarder{
-			Client:         client,
-			Logger:         logger,
-			RequestTimeout: cfg.RequestTimeout,
+			Client:            client,
+			Logger:            logger,
+			RequestTimeout:    cfg.RequestTimeout,
+			DiscordWebhookURL: cfg.DiscordWebhookURL,
 		},
 		targets: targets,
 	}, nil
@@ -356,6 +357,10 @@ func (h *Handler) fetchJSON(ctx context.Context, service, path string, params ur
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == 429 {
+		config.SendDiscordWebhook(h.cfg.DiscordWebhookURL, fmt.Sprintf("Received 429 from upstream: %s", target.String()))
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("roblox request failed: %s", resp.Status)

@@ -38,9 +38,10 @@ func New(cfg config.Config, logger *slog.Logger, client *http.Client) (*Handler,
 		cfg:    cfg,
 		logger: logger.With(slog.String("component", "provider-handler")),
 		forwarder: &proxy.Forwarder{
-			Client:         client,
-			Logger:         logger,
-			RequestTimeout: cfg.RequestTimeout,
+			Client:            client,
+			Logger:            logger,
+			RequestTimeout:    cfg.RequestTimeout,
+			DiscordWebhookURL: cfg.DiscordWebhookURL,
 		},
 		upstreams: upstreams,
 	}, nil
