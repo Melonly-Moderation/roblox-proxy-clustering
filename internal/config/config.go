@@ -3,118 +3,144 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
-const (
-	roleProvider Role = "provider"
-	roleMember   Role = "member"
-)
-
-// Role represents the operating mode for the proxy.
+// Role identifies the runtime mode for the proxy service.
 type Role string
 
-// Config captures the runtime configuration sourced from environment variables.
-type Config struct {
-	Role           Role
-	ListenAddr     string
-	ClusterTargets []*url.URL
-	RedisURL       string
-	RequestTimeout time.Duration
-}
-
 const (
-	defaultListenAddr  = ":8080"
-	defaultTimeout     = 3 * time.Second
-	providerClusterEnv = "PROXY_PROVIDER_CLUSTERS"
-	memberClusterEnv   = "PROXY_MEMBER_CLUSTERS"
+	RoleProvider Role = "provider"
+	RoleMember   Role = "member"
 )
 
-// Load reads and validates environment configuration for the service.
-func Load() (*Config, error) {
-	cfg := &Config{
-		ListenAddr:     getEnv("PROXY_LISTEN_ADDR", defaultListenAddr),
-		RedisURL:       strings.TrimSpace(os.Getenv("PROXY_REDIS_URL")),
-		RequestTimeout: defaultTimeout,
+const (
+	defaultListenAddr          = ":8080"
+	defaultRequestTimeout      = 6 * time.Second
+	defaultTransportTimeout    = 15 * time.Second
+	defaultDialTimeout         = 750 * time.Millisecond
+	defaultIdleConnTimeout     = 90 * time.Second
+	defaultMaxIdleConns        = 512
+	defaultMaxIdleConnsPerHost = 256
+	defaultBackgroundRefresh   = 5 * time.Hour
+	defaultCacheTTL            = 30 * 24 * time.Hour
+)
+
+// Config aggregates runtime configuration derived from environment variables.
+type Config struct {
+	Role                   Role
+	ListenAddr             string
+	ProviderClusters       []string
+	MemberClusters         []string
+	RedisURL               string
+	RequestTimeout         time.Duration
+	TransportTimeout       time.Duration
+	DialTimeout            time.Duration
+	IdleConnTimeout        time.Duration
+	MaxIdleConns           int
+	MaxIdleConnsPerHost    int
+	BackgroundRefreshAfter time.Duration
+	CacheTTL               time.Duration
+}
+
+// Load parses environment variables and returns a validated Config.
+func Load() (Config, error) {
+	cfg := Config{
+		ListenAddr:             stringOrDefault(os.Getenv("PROXY_LISTEN_ADDR"), defaultListenAddr),
+		RequestTimeout:         durationOrDefault(os.Getenv("PROXY_REQUEST_TIMEOUT"), defaultRequestTimeout),
+		TransportTimeout:       durationOrDefault(os.Getenv("PROXY_TRANSPORT_TIMEOUT"), defaultTransportTimeout),
+		DialTimeout:            durationOrDefault(os.Getenv("PROXY_DIAL_TIMEOUT"), defaultDialTimeout),
+		IdleConnTimeout:        durationOrDefault(os.Getenv("PROXY_IDLE_CONN_TIMEOUT"), defaultIdleConnTimeout),
+		MaxIdleConns:           intOrDefault(os.Getenv("PROXY_MAX_IDLE_CONNS"), defaultMaxIdleConns),
+		MaxIdleConnsPerHost:    intOrDefault(os.Getenv("PROXY_MAX_IDLE_CONNS_PER_HOST"), defaultMaxIdleConnsPerHost),
+		BackgroundRefreshAfter: durationOrDefault(os.Getenv("PROXY_BACKGROUND_REFRESH_AFTER"), defaultBackgroundRefresh),
+		CacheTTL:               durationOrDefault(os.Getenv("PROXY_CACHE_TTL"), defaultCacheTTL),
 	}
 
-	role := strings.ToLower(strings.TrimSpace(getEnv("PROXY_ROLE", string(roleProvider))))
-	switch Role(role) {
-	case roleProvider, roleMember:
-		cfg.Role = Role(role)
+	roleRaw := strings.TrimSpace(strings.ToLower(os.Getenv("PROXY_ROLE")))
+	switch Role(roleRaw) {
+	case RoleProvider:
+		cfg.Role = RoleProvider
+	case RoleMember:
+		cfg.Role = RoleMember
 	default:
-		return nil, fmt.Errorf("invalid PROXY_ROLE: %s", role)
+		return Config{}, fmt.Errorf("invalid PROXY_ROLE %q: must be %q or %q", roleRaw, RoleProvider, RoleMember)
 	}
 
-	if timeoutStr := strings.TrimSpace(os.Getenv("PROXY_TIMEOUT_MS")); timeoutStr != "" {
-		timeout, err := time.ParseDuration(timeoutStr + "ms")
-		if err != nil {
-			return nil, fmt.Errorf("invalid PROXY_TIMEOUT_MS: %w", err)
-		}
-		if timeout < 500*time.Millisecond {
-			return nil, errors.New("PROXY_TIMEOUT_MS too low; must be >= 500ms")
-		}
-		cfg.RequestTimeout = timeout
+	cfg.RedisURL = strings.TrimSpace(os.Getenv("PROXY_REDIS_URL"))
+	if cfg.RedisURL == "" {
+		return Config{}, errors.New("PROXY_REDIS_URL must be provided")
 	}
 
-	clusterEnv := providerClusterEnv
-	if cfg.Role == roleMember {
-		clusterEnv = memberClusterEnv
+	switch cfg.Role {
+	case RoleProvider:
+		cfg.ProviderClusters = splitAndClean(os.Getenv("PROXY_PROVIDER_CLUSTERS"))
+		if len(cfg.ProviderClusters) == 0 {
+			return Config{}, errors.New("PROXY_PROVIDER_CLUSTERS must list at least one upstream")
+		}
+	case RoleMember:
+		cfg.MemberClusters = splitAndClean(os.Getenv("PROXY_MEMBER_CLUSTERS"))
+		if len(cfg.MemberClusters) == 0 {
+			return Config{}, errors.New("PROXY_MEMBER_CLUSTERS must list at least one upstream")
+		}
 	}
-	rawTargets := strings.TrimSpace(os.Getenv(clusterEnv))
-	if rawTargets == "" {
-		return nil, fmt.Errorf("%s must be set with at least one upstream", clusterEnv)
+
+	if cfg.BackgroundRefreshAfter <= 0 {
+		return Config{}, errors.New("PROXY_BACKGROUND_REFRESH_AFTER must be positive")
 	}
-	targets, err := parseTargets(rawTargets)
-	if err != nil {
-		return nil, err
+
+	if cfg.CacheTTL <= 0 {
+		return Config{}, errors.New("PROXY_CACHE_TTL must be positive")
 	}
-	cfg.ClusterTargets = targets
 
 	return cfg, nil
 }
 
-func parseTargets(input string) ([]*url.URL, error) {
-	items := strings.Split(input, ",")
-	parsed := make([]*url.URL, 0, len(items))
-	for _, item := range items {
-		candidate := strings.TrimSpace(item)
-		if candidate == "" {
-			continue
-		}
-		if !strings.Contains(candidate, "://") {
-			candidate = "https://" + candidate
-		}
-		u, err := url.Parse(candidate)
-		if err != nil {
-			return nil, fmt.Errorf("invalid cluster target %q: %w", candidate, err)
-		}
-		if u.Scheme != "https" && u.Scheme != "http" && !isDirectScheme(u.Scheme) {
-			return nil, fmt.Errorf("cluster target %q must include http/https or use direct://", candidate)
-		}
-		if !isDirectScheme(u.Scheme) && u.Host == "" {
-			return nil, fmt.Errorf("cluster target %q must include host", candidate)
-		}
-		parsed = append(parsed, u)
+func stringOrDefault(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
 	}
-
-	if len(parsed) == 0 {
-		return nil, errors.New("no valid cluster targets provided")
-	}
-
-	return parsed, nil
+	return strings.TrimSpace(value)
 }
 
-func getEnv(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
+func durationOrDefault(raw string, fallback time.Duration) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
 	}
-	return fallback
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
-func isDirectScheme(scheme string) bool {
-	return strings.EqualFold(scheme, "direct") || strings.EqualFold(scheme, "origin")
+func intOrDefault(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+func splitAndClean(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		p := strings.TrimSpace(part)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

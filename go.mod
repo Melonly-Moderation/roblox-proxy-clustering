@@ -1,9 +1,9 @@
-module roblox-proxy-clustering
+module github.com/NoahCxrest/roblox-proxy-clustering
 
 go 1.25
 
 require (
-	github.com/redis/go-redis/v9 v9.5.1
+	github.com/redis/go-redis/v9 v9.5.4
 	golang.org/x/sync v0.8.0
 )
 

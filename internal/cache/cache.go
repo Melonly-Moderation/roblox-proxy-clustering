@@ -1,22 +1,18 @@
 package cache
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
-// Layer is a lightweight cache abstraction used for targeted response caching.
-type Layer interface {
-	Get(ctx context.Context, key string) ([]byte, error)
-	Set(ctx context.Context, key string, value []byte, ttlSeconds int) error
+// Entry represents a cached payload with metadata used for staleness checks.
+type Entry struct {
+	Payload  []byte
+	StoredAt time.Time
 }
 
-// Noop implements a zero-effect cache layer.
-type Noop struct{}
-
-// Get always returns nil with no error.
-func (Noop) Get(context.Context, string) ([]byte, error) {
-	return nil, nil
-}
-
-// Set performs no operation and always succeeds.
-func (Noop) Set(context.Context, string, []byte, int) error {
-	return nil
+// Store describes cache backends capable of storing opaque payloads with TTLs.
+type Store interface {
+	Get(ctx context.Context, key string) (Entry, bool, error)
+	Set(ctx context.Context, key string, payload []byte, ttl time.Duration) error
 }
