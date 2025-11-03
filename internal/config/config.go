@@ -1,9 +1,7 @@
 package config
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -157,21 +155,14 @@ func SendDiscordWebhook(webhookURL, message string) {
 		return
 	}
 
-	payload := map[string]string{"content": message}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		// Log error? But no logger here.
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, strings.NewReader(message))
 	if err != nil {
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "text/plain")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
