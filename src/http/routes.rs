@@ -3,25 +3,52 @@ use std::net::SocketAddr;
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{Request, Response},
+    http::{Request, Response, StatusCode},
     response::IntoResponse,
-    routing::any,
+    routing::{any, get},
     Router,
 };
+use serde_json::json;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     app::AppState,
     domain::Role,
-    services::{member, provider},
+    services::{member, provider, response},
 };
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/healthz", get(health))
         .fallback(any(dispatch))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn root(State(state): State<AppState>) -> Response<Body> {
+    json_status(
+        StatusCode::OK,
+        json!({
+            "service": "roblox-proxy-clustering",
+            "status": "ok",
+            "role": state.settings.role,
+        }),
+        &state,
+    )
+}
+
+async fn health(State(state): State<AppState>) -> Response<Body> {
+    json_status(
+        StatusCode::OK,
+        json!({
+            "status": "ok",
+            "role": state.settings.role,
+        }),
+        &state,
+    )
 }
 
 async fn dispatch(
@@ -46,4 +73,11 @@ async fn dispatch(
             response
         }
     }
+}
+
+fn json_status(status: StatusCode, payload: serde_json::Value, state: &AppState) -> Response<Body> {
+    let payload = serde_json::to_vec(&payload)
+        .unwrap_or_else(|_| b"{\"error\":\"internal server error\"}".to_vec());
+
+    response::json_bytes(status, payload, state.settings.role, None)
 }

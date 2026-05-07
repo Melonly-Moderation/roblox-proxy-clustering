@@ -1,4 +1,5 @@
-use reqwest::{header, StatusCode};
+use axum::http::StatusCode;
+use reqwest::header;
 use serde::de::DeserializeOwned;
 use url::Url;
 
@@ -43,13 +44,33 @@ impl RobloxRepository {
         }
 
         if !status.is_success() {
-            return Err(AppError::BadGateway(format!(
-                "roblox request failed: {status} {}",
-                error_message(&bytes)
-            )));
+            return Err(AppError::Upstream {
+                status: client_status_for_upstream(status),
+                message: upstream_error_message(status, &bytes),
+            });
         }
 
         Ok(serde_json::from_slice(&bytes)?)
+    }
+}
+
+fn client_status_for_upstream(status: StatusCode) -> StatusCode {
+    match status {
+        StatusCode::TOO_MANY_REQUESTS => StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::NOT_FOUND => StatusCode::NOT_FOUND,
+        StatusCode::SERVICE_UNAVAILABLE => StatusCode::SERVICE_UNAVAILABLE,
+        status if status.is_server_error() => StatusCode::BAD_GATEWAY,
+        _ => StatusCode::BAD_GATEWAY,
+    }
+}
+
+fn upstream_error_message(status: StatusCode, bytes: &[u8]) -> String {
+    let message = error_message(bytes);
+
+    if message.is_empty() {
+        format!("roblox upstream returned {status}")
+    } else {
+        format!("roblox upstream returned {status}: {message}")
     }
 }
 

@@ -73,8 +73,13 @@ pub fn resolve_roblox_target(path: &str, query: Option<&str>) -> AppResult<Url> 
         .next()
         .filter(|segment| !segment.is_empty())
         .ok_or_else(|| {
-            AppError::BadGateway("unable to determine Roblox upstream from path".to_owned())
+            AppError::BadRequest(
+                "proxy path must include a Roblox service prefix, for example /users/v1/users/{id}"
+                    .to_owned(),
+            )
         })?;
+
+    validate_roblox_service(domain)?;
 
     let remaining = segments.collect::<Vec<_>>().join("/");
     let rewritten = if remaining.is_empty() {
@@ -86,6 +91,21 @@ pub fn resolve_roblox_target(path: &str, query: Option<&str>) -> AppResult<Url> 
     let mut url = Url::parse(&format!("https://{domain}.roblox.com{rewritten}"))?;
     url.set_query(query.filter(|value| !value.is_empty()));
     Ok(url)
+}
+
+fn validate_roblox_service(domain: &str) -> AppResult<()> {
+    let valid = !domain.is_empty()
+        && domain
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-'));
+
+    if !valid {
+        return Err(AppError::BadRequest(format!(
+            "invalid Roblox service prefix {domain:?}"
+        )));
+    }
+
+    Ok(())
 }
 
 pub fn consistent_index(key: &str, buckets: usize) -> usize {
@@ -147,5 +167,17 @@ mod tests {
         let base = Url::parse("https://member.example.com/base").unwrap();
         let url = absolute_target_url(&base, "/thumbnails/v1", Some("x=1")).unwrap();
         assert_eq!(url.as_str(), "https://member.example.com/thumbnails/v1?x=1");
+    }
+
+    #[test]
+    fn rejects_direct_targets_without_a_service_prefix() {
+        let error = resolve_roblox_target("/", None).unwrap_err();
+        assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn rejects_direct_targets_with_invalid_service_prefixes() {
+        let error = resolve_roblox_target("/favicon.ico", None).unwrap_err();
+        assert!(matches!(error, AppError::BadRequest(_)));
     }
 }

@@ -12,7 +12,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 use crate::{
     config::Settings,
-    domain::{upstream, MemberTarget, ProviderTarget},
+    domain::{upstream, MemberTarget, ProviderTarget, Role},
     error::AppError,
     http,
     infrastructure::{DiscordWebhook, ProxyHttpClient, RedisCache},
@@ -59,10 +59,16 @@ async fn build_state(settings: Arc<Settings>) -> Result<AppState, AppError> {
     let http = ProxyHttpClient::new(&settings)?;
     let webhook = DiscordWebhook::new(settings.discord_webhook_url.clone());
     let roblox = RobloxRepository::new(http.clone(), webhook.clone());
-    let member_targets =
-        upstream::parse_member_targets(&settings.member_clusters).unwrap_or_default();
-    let provider_targets =
-        upstream::parse_provider_targets(&settings.provider_clusters).unwrap_or_default();
+    let (member_targets, provider_targets) = match settings.role {
+        Role::Member => (
+            upstream::parse_member_targets(&settings.member_clusters)?,
+            Vec::new(),
+        ),
+        Role::Provider => (
+            Vec::new(),
+            upstream::parse_provider_targets(&settings.provider_clusters)?,
+        ),
+    };
 
     Ok(AppState {
         settings,

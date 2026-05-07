@@ -7,7 +7,7 @@ use axum::{
 };
 use serde_json::json;
 use thiserror::Error;
-use tracing::error;
+use tracing::{error, warn};
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -37,18 +37,56 @@ pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("bad gateway: {0}")]
     BadGateway(String),
+
+    #[error("upstream error: {message}")]
+    Upstream { status: StatusCode, message: String },
 }
 
 impl AppError {
     fn status_and_message(&self) -> (StatusCode, String) {
         match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.clone()),
+            Self::NotFound(message) => (StatusCode::NOT_FOUND, message.clone()),
             Self::BadGateway(message) => (StatusCode::BAD_GATEWAY, message.clone()),
+            Self::Upstream { status, message } => (*status, message.clone()),
+            Self::HttpClient(error) => {
+                warn!(%error, "upstream HTTP request failed");
+
+                if error.is_timeout() {
+                    (
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "upstream request timed out".to_owned(),
+                    )
+                } else if error.is_connect() {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        "could not connect to upstream service".to_owned(),
+                    )
+                } else if error.is_decode() {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        "upstream returned an invalid response".to_owned(),
+                    )
+                } else {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        "upstream request failed".to_owned(),
+                    )
+                }
+            }
+            Self::Redis(error) => {
+                error!(%error, "cache service request failed");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "cache service unavailable".to_owned(),
+                )
+            }
             Self::Config(_)
-            | Self::Redis(_)
-            | Self::HttpClient(_)
             | Self::Serialization(_)
             | Self::Url(_)
             | Self::HttpBuild(_)
