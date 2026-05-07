@@ -1,0 +1,33 @@
+[package]
+name = "roblox-proxy-clustering"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "High-performance Rust rewrite of the Roblox proxy clustering service"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.7", features = ["http2", "tokio"] }
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6"
+dotenvy = "0.15"
+futures-util = "0.3"
+humantime = "2"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"
