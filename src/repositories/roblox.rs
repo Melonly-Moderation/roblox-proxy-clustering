@@ -10,6 +10,7 @@ use crate::{
 
 const USER_AGENT: &str = "RobloxProxyCluster/1.0";
 const MAX_ERROR_BODY_BYTES: usize = 1 << 20;
+const HEALTH_CHECK_URL: &str = "https://users.roblox.com/v1/users/1";
 
 #[derive(Clone)]
 pub struct RobloxRepository {
@@ -20,6 +21,13 @@ pub struct RobloxRepository {
 impl RobloxRepository {
     pub fn new(http: ProxyHttpClient, webhook: DiscordWebhook) -> Self {
         Self { http, webhook }
+    }
+
+    pub async fn ping(&self) -> AppResult<()> {
+        self.fetch_json::<serde_json::Value>(Url::parse(HEALTH_CHECK_URL)?)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn fetch_json<T>(&self, target: Url) -> AppResult<T>

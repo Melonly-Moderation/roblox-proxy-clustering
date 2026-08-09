@@ -12,6 +12,10 @@ impl CacheRepository {
         Self { cache }
     }
 
+    pub async fn ping(&self) -> AppResult<()> {
+        self.cache.ping().await
+    }
+
     pub async fn get(&self, key: &str) -> AppResult<Option<CacheEntry>> {
         self.cache.get(key).await
     }

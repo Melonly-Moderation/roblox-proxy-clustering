@@ -10,6 +10,7 @@ use axum::{
 };
 use serde_json::json;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tracing::warn;
 
 use crate::{
     app::AppState,
@@ -41,14 +42,37 @@ async fn root(State(state): State<AppState>) -> Response<Body> {
 }
 
 async fn health(State(state): State<AppState>) -> Response<Body> {
-    json_status(
-        StatusCode::OK,
-        json!({
-            "status": "ok",
-            "role": state.settings.role,
-        }),
-        &state,
+    let checks = async { tokio::join!(state.cache.ping(), state.roblox.ping()) };
+    let healthy = match tokio::time::timeout(state.settings.request_timeout, checks).await {
+        Ok((redis, roblox)) => {
+            if let Err(error) = &redis {
+                warn!(%error, "health check failed for Redis");
+            }
+            if let Err(error) = &roblox {
+                warn!(%error, "health check failed for Roblox");
+            }
+
+            redis.is_ok() && roblox.is_ok()
+        }
+        Err(error) => {
+            warn!(%error, "health check timed out");
+            false
+        }
+    };
+
+    (
+        health_status(healthy),
+        if healthy { "ok" } else { "unhealthy" },
     )
+        .into_response()
+}
+
+fn health_status(healthy: bool) -> StatusCode {
+    if healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 async fn dispatch(
@@ -80,4 +104,15 @@ fn json_status(status: StatusCode, payload: serde_json::Value, state: &AppState)
         .unwrap_or_else(|_| b"{\"error\":\"internal server error\"}".to_vec());
 
     response::json_bytes(status, payload, state.settings.role, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_requires_all_dependencies() {
+        assert_eq!(health_status(true), StatusCode::OK);
+        assert_eq!(health_status(false), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }

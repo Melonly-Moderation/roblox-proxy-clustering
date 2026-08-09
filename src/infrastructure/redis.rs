@@ -21,6 +21,13 @@ impl RedisCache {
         Ok(Self { connection })
     }
 
+    pub async fn ping(&self) -> AppResult<()> {
+        let mut connection = self.connection.clone();
+        let _: String = redis::cmd("PING").query_async(&mut connection).await?;
+
+        Ok(())
+    }
+
     pub async fn get(&self, key: &str) -> AppResult<Option<CacheEntry>> {
         let mut connection = self.connection.clone();
         let data: Option<Vec<u8>> = connection.get(key).await?;
