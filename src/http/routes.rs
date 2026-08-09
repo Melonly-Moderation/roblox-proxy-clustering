@@ -16,7 +16,7 @@ use tracing::warn;
 use crate::{
     app::AppState,
     domain::{upstream, MemberTarget, ProviderTarget, Role},
-    error::AppResult,
+    error::{AppError, AppResult},
     services::{member, provider, response},
 };
 
@@ -58,11 +58,12 @@ async fn health(State(state): State<AppState>) -> Response<Body> {
             if let Err(error) = &redis {
                 warn!(%error, "health check failed for Redis");
             }
-            if let Err(error) = &roblox {
+            if !health_check_passed(&roblox) {
+                let error = roblox.as_ref().unwrap_err();
                 warn!(%error, "health check failed for Roblox");
             }
 
-            redis.is_ok() && roblox.is_ok() && proxies
+            redis.is_ok() && health_check_passed(&roblox) && proxies
         }
         Err(error) => {
             warn!(%error, "health check timed out");
@@ -94,11 +95,12 @@ async fn proxies_healthy(state: &AppState) -> bool {
         let host = target.host_str().unwrap_or("unknown").to_owned();
         let result = state.roblox.fetch_json::<serde_json::Value>(target).await;
 
-        if let Err(error) = &result {
+        if !health_check_passed(&result) {
+            let error = result.as_ref().unwrap_err();
             warn!(%error, %host, "health check failed for proxy");
         }
 
-        result.is_ok()
+        health_check_passed(&result)
     }))
     .await
     .into_iter()
@@ -129,6 +131,17 @@ fn health_status(healthy: bool) -> StatusCode {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     }
+}
+
+fn health_check_passed<T>(result: &AppResult<T>) -> bool {
+    matches!(
+        result,
+        Ok(_)
+            | Err(AppError::Upstream {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                ..
+            })
+    )
 }
 
 async fn dispatch(
@@ -170,6 +183,22 @@ mod tests {
     fn health_requires_all_dependencies() {
         assert_eq!(health_status(true), StatusCode::OK);
         assert_eq!(health_status(false), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn rate_limits_do_not_fail_health_checks() {
+        let rate_limited: AppResult<()> = Err(AppError::Upstream {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: "rate limited".to_owned(),
+        });
+        let unavailable: AppResult<()> = Err(AppError::Upstream {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "unavailable".to_owned(),
+        });
+
+        assert!(health_check_passed(&Ok(())));
+        assert!(health_check_passed(&rate_limited));
+        assert!(!health_check_passed(&unavailable));
     }
 
     #[test]
