@@ -8,15 +8,19 @@ use axum::{
     routing::{any, get},
     Router,
 };
+use futures_util::future::join_all;
 use serde_json::json;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::warn;
 
 use crate::{
     app::AppState,
-    domain::Role,
+    domain::{upstream, MemberTarget, ProviderTarget, Role},
+    error::AppResult,
     services::{member, provider, response},
 };
+
+const ROBLOX_HEALTH_PATH: &str = "/users/v1/users/1";
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -42,9 +46,15 @@ async fn root(State(state): State<AppState>) -> Response<Body> {
 }
 
 async fn health(State(state): State<AppState>) -> Response<Body> {
-    let checks = async { tokio::join!(state.cache.ping(), state.roblox.ping()) };
+    let checks = async {
+        tokio::join!(
+            state.cache.ping(),
+            state.roblox.ping(),
+            proxies_healthy(&state)
+        )
+    };
     let healthy = match tokio::time::timeout(state.settings.request_timeout, checks).await {
-        Ok((redis, roblox)) => {
+        Ok((redis, roblox, proxies)) => {
             if let Err(error) = &redis {
                 warn!(%error, "health check failed for Redis");
             }
@@ -52,7 +62,7 @@ async fn health(State(state): State<AppState>) -> Response<Body> {
                 warn!(%error, "health check failed for Roblox");
             }
 
-            redis.is_ok() && roblox.is_ok()
+            redis.is_ok() && roblox.is_ok() && proxies
         }
         Err(error) => {
             warn!(%error, "health check timed out");
@@ -65,6 +75,52 @@ async fn health(State(state): State<AppState>) -> Response<Body> {
         if healthy { "ok" } else { "unhealthy" },
     )
         .into_response()
+}
+
+async fn proxies_healthy(state: &AppState) -> bool {
+    let targets = match proxy_health_targets(
+        state.settings.role,
+        &state.member_targets,
+        &state.provider_targets,
+    ) {
+        Ok(targets) => targets,
+        Err(error) => {
+            warn!(%error, "could not build proxy health check targets");
+            return false;
+        }
+    };
+
+    join_all(targets.into_iter().map(|target| async {
+        let host = target.host_str().unwrap_or("unknown").to_owned();
+        let result = state.roblox.fetch_json::<serde_json::Value>(target).await;
+
+        if let Err(error) = &result {
+            warn!(%error, %host, "health check failed for proxy");
+        }
+
+        result.is_ok()
+    }))
+    .await
+    .into_iter()
+    .all(|healthy| healthy)
+}
+
+fn proxy_health_targets(
+    role: Role,
+    member_targets: &[MemberTarget],
+    provider_targets: &[ProviderTarget],
+) -> AppResult<Vec<url::Url>> {
+    match role {
+        Role::Member => member_targets
+            .iter()
+            .filter(|target| matches!(target, MemberTarget::Static(_)))
+            .map(|target| upstream::member_target_url(target, ROBLOX_HEALTH_PATH, None))
+            .collect(),
+        Role::Provider => provider_targets
+            .iter()
+            .map(|target| upstream::provider_target_url(target, ROBLOX_HEALTH_PATH, None))
+            .collect(),
+    }
 }
 
 fn health_status(healthy: bool) -> StatusCode {
@@ -114,5 +170,30 @@ mod tests {
     fn health_requires_all_dependencies() {
         assert_eq!(health_status(true), StatusCode::OK);
         assert_eq!(health_status(false), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn health_checks_every_configured_proxy() {
+        let members = upstream::parse_member_targets(&[
+            "direct://".to_owned(),
+            "https://member-one.example.com".to_owned(),
+            "https://member-two.example.com".to_owned(),
+        ])
+        .unwrap();
+        let providers = upstream::parse_provider_targets(&[
+            "https://provider-one.example.com".to_owned(),
+            "https://provider-two.example.com".to_owned(),
+        ])
+        .unwrap();
+
+        let member_urls = proxy_health_targets(Role::Member, &members, &providers).unwrap();
+        let provider_urls = proxy_health_targets(Role::Provider, &members, &providers).unwrap();
+
+        assert_eq!(member_urls.len(), 2);
+        assert_eq!(provider_urls.len(), 2);
+        assert!(member_urls
+            .iter()
+            .chain(&provider_urls)
+            .all(|url| url.path() == ROBLOX_HEALTH_PATH));
     }
 }
